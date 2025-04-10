@@ -1,8 +1,12 @@
 # meta developer: @mypchikov
+# requires: matplotlib
 
 from .. import loader, utils
 import aiohttp
 from datetime import datetime
+import matplotlib.pyplot as plt
+import os
+import io
 
 @loader.tds
 class NightscoutMonitorMod(loader.Module):
@@ -19,18 +23,22 @@ class NightscoutMonitorMod(loader.Module):
             ),
             loader.ConfigValue(
                 "units",
-                "mg/dL",  #  mmol/L
-                doc="Формат глюкозы: mg/dL или mmol/L (без проверки)"
+                "mg/dL",  # или mmol/L
+                doc="Формат глюкозы: mg/dL или mmol/L"
+            ),
+            loader.ConfigValue(
+                "show_graph",
+                True,
+                doc="Показывать график глюкозы (True/False)"
             )
         )
 
-    async def _fetch_data(self):
+    async def _fetch_data(self, count=1):
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.config['nightscout_url'].rstrip('/')}/api/v1/entries.json?count=1") as resp:
+            async with session.get(f"{self.config['nightscout_url'].rstrip('/')}/api/v1/entries.json?count={count}") as resp:
                 if resp.status != 200:
                     raise Exception(f"Ошибка запроса: {resp.status}")
-                data = await resp.json()
-                return data[0] if data else None
+                return await resp.json()
 
     def _convert_units(self, sgv):
         if self.config["units"].lower() == "mmol/l":
@@ -54,15 +62,41 @@ class NightscoutMonitorMod(loader.Module):
         }
         return trends.get(direction, "❔")
 
+    def _draw_graph(self, entries):
+        times = [datetime.fromtimestamp(e["date"] / 1000) for e in entries]
+        values = [self._convert_units(e["sgv"]) for e in entries]
+
+        plt.figure(figsize=(8, 3))
+        plt.plot(times, values, marker='o', linestyle='-', color='blue')
+        plt.title("Глюкоза за последние измерения")
+        plt.xlabel("Время")
+        plt.ylabel(f"Глюкоза ({self._format_units()})")
+        plt.grid(True)
+
+        # Установка масштаба для оси Y
+        if self.config["units"].lower() == "mmol/l":
+            plt.ylim(2.2, 22.2)  # Диапазон для mmol/L
+        else:
+            plt.ylim(40, 400)  # Диапазон для mg/dL
+
+        plt.tight_layout()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png")
+        plt.close()
+        buf.seek(0)
+        return buf
+
     @loader.command()
     async def glucose(self, message):
-        """Получить текущее значение глюкозы с сервера Nightscout"""
+        """Получить текущее значение глюкозы с графиком (если включено)"""
         try:
-            entry = await self._fetch_data()
-            if not entry:
+            data = await self._fetch_data(12)
+            if not data:
                 await utils.answer(message, "❌ Нет данных от сервера.")
                 return
 
+            entry = data[0]
             sgv = self._convert_units(entry["sgv"])
             units = self._format_units()
             direction = self._trend_emoji(entry.get("direction", ""))
@@ -103,7 +137,11 @@ class NightscoutMonitorMod(loader.Module):
                 delta_conv = self._convert_units(delta)
                 info += f"↕️ Delta: <code>{delta_conv} {units}</code>\n"
 
-            await utils.answer(message, info)
+            if self.config["show_graph"]:
+                buf = self._draw_graph(data)
+                await message.client.send_file(message.chat_id, buf, caption=info, reply_to=message.id)
+            else:
+                await utils.answer(message, info)
 
         except Exception as e:
             await utils.answer(message, f"⚠️ Ошибка: {e}")
