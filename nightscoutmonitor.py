@@ -129,14 +129,6 @@ class NightscoutMonitorMod(loader.Module):
                 f"📡 Устройство: <code>{device}</code>\n"
             )
 
-            if raw:
-                info += f"📊 Raw: <code>{raw}</code>\n"
-            if noise is not None:
-                info += f"🔧 Шум: <code>{noise}</code>\n"
-            if delta:
-                delta_conv = self._convert_units(delta)
-                info += f"↕️ Delta: <code>{delta_conv} {units}</code>\n"
-
             if self.config["show_graph"]:
                 buf = self._draw_graph(data)
                 await message.client.send_file(message.chat_id, buf, caption=info, reply_to=message.id)
