@@ -66,19 +66,32 @@ class NightscoutMonitorMod(loader.Module):
         times = [datetime.fromtimestamp(e["date"] / 1000) for e in entries]
         values = [self._convert_units(e["sgv"]) for e in entries]
 
-        plt.figure(figsize=(8, 3))
-        plt.plot(times, values, marker='o', linestyle='-', color='blue')
-        plt.title("Глюкоза за последние измерения")
-        plt.xlabel("Время")
-        plt.ylabel(f"Глюкоза ({self._format_units()})")
-        plt.grid(True)
+        plt.figure(figsize=(8, 4))
+        ax = plt.gca()
 
-        # Установка масштаба для оси Y
+        # Основной график
+        ax.plot(times, values, marker='o', linestyle='-', color='blue')
+
+        # Настройки Y-оси
         if self.config["units"].lower() == "mmol/l":
-            plt.ylim(2.2, 22.2)  # Диапазон для mmol/L
+            ymin, ymax = 2.2, 22.2
+            norm_low, norm_high = 4, 9
         else:
-            plt.ylim(40, 400)  # Диапазон для mg/dL
+            ymin, ymax = 40, 400
+            norm_low, norm_high = 70, 160
 
+        ax.set_ylim(ymin, ymax)
+        ax.set_ylabel(self._format_units())
+
+        # Подсветка безопасной зоны
+        ax.axhspan(norm_low, norm_high, facecolor='green', alpha=0.1)
+
+        # Пунктирные границы нормы
+        ax.axhline(norm_low, color='red', linestyle='--', linewidth=1)
+        ax.axhline(norm_high, color='orange', linestyle='--', linewidth=1)
+
+        ax.grid(True, which='major', linestyle='--', alpha=0.3)
+        ax.set_title("Глюкоза за последние измерения")
         plt.tight_layout()
 
         buf = io.BytesIO()
