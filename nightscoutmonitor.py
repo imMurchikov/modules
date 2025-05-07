@@ -5,7 +5,6 @@ from .. import loader, utils
 import aiohttp
 from datetime import datetime
 import matplotlib.pyplot as plt
-import os
 import io
 
 @loader.tds
@@ -33,9 +32,10 @@ class NightscoutMonitorMod(loader.Module):
             )
         )
 
-    async def _fetch_data(self, count=1):
+    async def _fetch_data(self, count=12):
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.config['nightscout_url'].rstrip('/')}/api/v1/entries.json?count={count}") as resp:
+            url = f"{self.config['nightscout_url'].rstrip('/')}/api/v1/entries.json?count={count}"
+            async with session.get(url) as resp:
                 if resp.status != 200:
                     raise Exception(f"Ошибка запроса: {resp.status}")
                 return await resp.json()
@@ -66,13 +66,8 @@ class NightscoutMonitorMod(loader.Module):
         times = [datetime.fromtimestamp(e["date"] / 1000) for e in entries]
         values = [self._convert_units(e["sgv"]) for e in entries]
 
-        plt.figure(figsize=(8, 4))
-        ax = plt.gca()
+        fig, ax = plt.subplots(figsize=(8, 4))
 
-        # Основной график
-        ax.plot(times, values, marker='o', linestyle='-', color='blue')
-
-        # Настройки Y-оси
         if self.config["units"].lower() == "mmol/l":
             ymin, ymax = 2.2, 22.2
             norm_low, norm_high = 4, 9
@@ -80,18 +75,26 @@ class NightscoutMonitorMod(loader.Module):
             ymin, ymax = 40, 400
             norm_low, norm_high = 70, 160
 
+        ax.axhspan(norm_low, norm_high, facecolor='green', alpha=0.1)
+        ax.axhline(norm_low, color='red', linestyle='--', linewidth=1)
+        ax.axhline(norm_high, color='orange', linestyle='--', linewidth=1)
         ax.set_ylim(ymin, ymax)
         ax.set_ylabel(self._format_units())
 
-        # Подсветка безопасной зоны
-        ax.axhspan(norm_low, norm_high, facecolor='green', alpha=0.1)
+        for i in range(1, len(times)):
+            t1, t2 = times[i - 1], times[i]
+            v1, v2 = values[i - 1], values[i]
+            if norm_low <= v1 <= norm_high and norm_low <= v2 <= norm_high:
+                color = 'black'
+            elif v1 < norm_low or v2 < norm_low:
+                color = 'red'
+            else:
+                color = 'orange'
+            ax.plot([t1, t2], [v1, v2], color=color, linewidth=2)
 
-        # Пунктирные границы нормы
-        ax.axhline(norm_low, color='red', linestyle='--', linewidth=1)
-        ax.axhline(norm_high, color='orange', linestyle='--', linewidth=1)
-
-        ax.grid(True, which='major', linestyle='--', alpha=0.3)
+        ax.scatter(times, values, color='blue', s=6)
         ax.set_title("Глюкоза за последние измерения")
+        ax.grid(True, which='major', linestyle='--', alpha=0.3)
         plt.tight_layout()
 
         buf = io.BytesIO()
@@ -104,10 +107,12 @@ class NightscoutMonitorMod(loader.Module):
     async def glucose(self, message):
         """Получить текущее значение глюкозы с графиком (если включено)"""
         try:
+            # Удаляем командное сообщение
+            await message.delete()
+
             data = await self._fetch_data(12)
             if not data:
-                await utils.answer(message, "❌ Нет данных от сервера.")
-                return
+                return  # message удалено, дополнительный ответ не нужен
 
             entry = data[0]
             sgv = self._convert_units(entry["sgv"])
@@ -118,11 +123,6 @@ class NightscoutMonitorMod(loader.Module):
             time_str = date.strftime('%H:%M:%S')
             ago = (datetime.now() - date).seconds // 60
 
-            raw = entry.get("unfiltered", None)
-            noise = entry.get("noise", None)
-            delta = entry.get("delta", None)
-
-            # Состояние
             status = "🟢 Норма"
             if self.config["units"].lower() == "mmol/l":
                 if sgv < 4:
@@ -139,12 +139,12 @@ class NightscoutMonitorMod(loader.Module):
                 f"🩸 <b>Глюкоза:</b> <code>{sgv} {units}</code> {direction}\n"
                 f"{status}\n"
                 f"🕒 Время: <code>{time_str}</code> ({ago} мин назад)\n"
-                f"📡 Устройство: <code>{device}</code>\n"
+                f"📡 Устройство: <code>{device}</code>"
             )
 
             if self.config["show_graph"]:
                 buf = self._draw_graph(data)
-                await message.client.send_file(message.chat_id, buf, caption=info, reply_to=message.id)
+                await message.client.send_file(message.chat_id, buf, caption=info)
             else:
                 await utils.answer(message, info)
 
